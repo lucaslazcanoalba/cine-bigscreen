@@ -72,7 +72,7 @@ html, body { width: 100%; height: 100%; overflow-x: hidden; }
   height: 100%; width: 0;
   background: linear-gradient(90deg, var(--gold), var(--neon));
   border-radius: 2px;
-  animation: loadBar 1.8s ease forwards;
+  animation: loadBar 0.5s ease forwards;
 }
 @keyframes loadBar { to { width: 100%; } }
 .loader-sub {
@@ -832,45 +832,51 @@ let APP = {
 };
 
 /* ════════════════════════════════════════════════════════
-   INICIALIZACIÓN
+   INICIALIZACIÓN — nunca se queda colgada
 ════════════════════════════════════════════════════════ */
-/* ════════════════════════════════════════════════════════
-   INICIALIZACIÓN — sin esperar a A-Frame para el loader
-════════════════════════════════════════════════════════ */
-async function initApp() {
-  loadVotedIds();
 
-  if (!CONFIG.OFFLINE_MODE) {
-    try {
-      supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON);
-    } catch(e) {
-      console.warn('Supabase no disponible, usando modo offline.', e);
-      CONFIG.OFFLINE_MODE = true;
-    }
-  }
-
-  try {
-    await Promise.race([
-      fetchData(),
-      new Promise(r => setTimeout(r, 4000)) // timeout de seguridad
-    ]);
-  } catch(e) {
-    console.warn('fetchData falló, usando local:', e);
-    APP.movies = CONFIG.MOVIES_LOCAL;
-  }
-
-  // Ocultar loader y enrutar
-  const loader = document.getElementById('loader');
-  loader.classList.add('hidden');
-  setTimeout(() => { loader.style.display = 'none'; }, 700);
-  routeView();
+function hideLoader() {
+  var loader = document.getElementById('loader');
+  if (!loader) return;
+  loader.style.transition = 'opacity 0.5s';
+  loader.style.opacity = '0';
+  setTimeout(function(){ loader.style.display = 'none'; }, 600);
 }
 
-// Iniciar en cuanto el DOM esté listo (no esperar A-Frame ni imágenes)
+function waitForLib(cb, n) {
+  n = n || 0;
+  if (window.supabase && window.supabase.createClient) { cb(); }
+  else if (n < 40) { setTimeout(function(){ waitForLib(cb, n+1); }, 150); }
+  else { CONFIG.OFFLINE_MODE = true; cb(); }
+}
+
+function initApp() {
+  loadVotedIds();
+  // Mostrar datos locales de inmediato para no bloquear
+  APP.movies = CONFIG.MOVIES_LOCAL.slice();
+  APP.phase  = CONFIG.DEMO_PHASE;
+  // Ocultar loader y enrutar SIN esperar nada
+  hideLoader();
+  routeView();
+  // Supabase en segundo plano
+  if (!CONFIG.OFFLINE_MODE) {
+    waitForLib(function() {
+      try {
+        supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON);
+        fetchData().then(function() {
+          if (APP.mode === '2d') render2D();
+          else if (APP.mode === '3d') { setupPosters3D(); setupDoor3D(); }
+        }).catch(function(e){ console.warn('fetchData error:', e); });
+      } catch(e) { console.warn('Supabase init error:', e); }
+    });
+  }
+}
+
+// Arrancar lo antes posible
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', initApp);
 } else {
-  initApp();
+  setTimeout(initApp, 0);
 }
 
 /* ════════════════════════════════════════════════════════
@@ -929,16 +935,12 @@ async function fetchData() {
    ENRUTAMIENTO AUTOMÁTICO 2D / 3D
 ════════════════════════════════════════════════════════ */
 function routeView() {
-  const ua = navigator.userAgent;
-  // Quest/Pico tienen su propio navegador con estas cadenas
-  const isVRHeadset = /OculusBrowser|Quest|Pico|VR/i.test(ua);
-  const isMobile    = /Android|iPhone|iPad/i.test(ua);
-
+  var ua = navigator.userAgent || '';
+  // Quest usa "OculusBrowser", Pico usa "Pico", algunos usan "VR"
+  var isVRHeadset = /OculusBrowser|Quest|Pico Neo|PicoVR/i.test(ua);
   if (isVRHeadset) {
-    // En gafas → entrar directo al pasillo 3D
     switchTo3D();
   } else {
-    // PC o móvil → vista 2D + botón para entrar en VR
     switchTo2D();
     document.getElementById('vr-hint').style.display = 'block';
   }
